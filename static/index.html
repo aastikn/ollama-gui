@@ -337,6 +337,7 @@
             <div class="input-area">
                 <input type="text" id="user-input" placeholder="What would you like to ask?" />
                 <button id="send-button">Send</button>
+                <button id="stop-button" style="display: none; background-color: #e53e3e;">Stop</button>
             </div>
         </div>
         
@@ -353,6 +354,8 @@
         let selectedModel = null;
         let messages = [];
         let md = null; // Markdown parser
+        let currentGenerationSource = null; // Track current EventSource
+        let isGenerating = false; // Track generation state
         
         // Initialize the app
         document.addEventListener('DOMContentLoaded', async () => {
@@ -540,6 +543,12 @@
             // Add assistant message placeholder
             const assistantMsgElement = addMessage('assistant', `**Asking ${selectedModel}...**`);
             
+            // Show stop button and hide send button
+            document.getElementById('send-button').style.display = 'none';
+            document.getElementById('stop-button').style.display = 'inline-block';
+            document.getElementById('user-input').disabled = true;
+            isGenerating = true;
+            
             // Stream the response
             streamResponse(selectedModel, prompt, assistantMsgElement);
         }
@@ -586,11 +595,14 @@
                 const url = `/api/stream/${encodedModel}/${encodedPrompt}`;
                 const eventSource = new EventSource(url);
                 
+                // Store the EventSource for potential cancellation
+                currentGenerationSource = eventSource;
+                
                 let fullResponse = '';
                 
                 eventSource.onmessage = (event) => {
                     if (event.data === '[DONE]') {
-                        eventSource.close();
+                        finishGeneration();
                         return;
                     }
                     
@@ -609,13 +621,54 @@
                 
                 eventSource.onerror = (error) => {
                     console.error('SSE Error:', error);
-                    messageElement.innerHTML = 'Error: Failed to get response from the model.';
-                    eventSource.close();
+                    if (isGenerating) {
+                        messageElement.innerHTML += '\n\n*Generation stopped.*';
+                        finishGeneration();
+                    }
+                };
+                
+                // Setup stop button handler
+                document.getElementById('stop-button').onclick = () => {
+                    if (currentGenerationSource) {
+                        // Close the connection
+                        currentGenerationSource.close();
+                        currentGenerationSource = null;
+                        
+                        // Update the UI to indicate the stop
+                        messageElement.innerHTML = md.render(fullResponse + '\n\n*Generation stopped.*');
+                        
+                        // Reset UI elements
+                        finishGeneration();
+                        
+                        // Fetch abort endpoint to notify server
+                        fetch('/api/abort_generation', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            }
+                        }).catch(error => console.error('Error aborting generation:', error));
+                    }
                 };
             } catch (error) {
                 console.error('Error:', error);
                 messageElement.innerHTML = `Error: ${error.message}`;
+                finishGeneration();
             }
+        }
+        
+        // Reset UI after generation completes or is stopped
+        function finishGeneration() {
+            // Close the EventSource if it exists
+            if (currentGenerationSource) {
+                currentGenerationSource.close();
+                currentGenerationSource = null;
+            }
+            
+            // Reset UI elements
+            document.getElementById('send-button').style.display = 'inline-block';
+            document.getElementById('stop-button').style.display = 'none';
+            document.getElementById('user-input').disabled = false;
+            isGenerating = false;
         }
     </script>
 </body>

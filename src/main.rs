@@ -88,6 +88,7 @@ async fn main() {
         .route("/api/stream/:model/:prompt", get(stream_response))
         .route("/api/check_ollama", get(check_ollama))
         .route("/api/start_ollama", get(try_start_ollama))
+        .route("/api/abort_generation", post(abort_generation))
         .nest_service("/static", ServeDir::new("static"))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
@@ -287,4 +288,12 @@ async fn stream_response(
     });
     
     Sse::new(ReceiverStream::new(rx))
+}
+
+// Handle abort notifications from client
+async fn abort_generation() -> Result<Json<serde_json::Value>, StatusCode> {
+    // We don't need to do much here since the client already closed the connection
+    // This endpoint mainly serves as a way to log aborts if needed
+    tracing::info!("Generation aborted by client");
+    Ok(Json(serde_json::json!({ "status": "aborted" })))
 }
