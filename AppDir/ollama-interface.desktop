@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Ollama Interface
+Exec=ollama-interface
+Icon=ollama-interface
+Type=Application
+Categories=Utility;
+Comment=A Rust-based interface for Ollama models
