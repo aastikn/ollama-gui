@@ -12,6 +12,182 @@
             padding: 20px;
             background-color: #f5f7f9;
             color: #333;
+            transition: background-color 0.3s, color 0.3s;
+        }
+        
+        /* Dark mode styles */
+        body.dark-mode {
+            background-color: #1a1c20;
+            color: #e6e6e6;
+        }
+        
+        .dark-mode .chat-container {
+            background-color: #2d2d2d;
+            border-color: #444;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        }
+        
+        .dark-mode .message {
+            box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        }
+        
+        .dark-mode .user-message {
+            background-color: #2b4255;
+            border-color: #375a7f;
+        }
+        
+        .dark-mode .assistant-message {
+            background-color: #2d2d2d;
+            border-color: #444;
+        }
+        
+        .dark-mode .input-area {
+            background-color: #2d2d2d;
+            border-top-color: #444;
+        }
+        
+        .dark-mode #user-input {
+            background-color: #333;
+            color: #e6e6e6;
+            border-color: #555;
+        }
+        
+        .dark-mode #user-input:focus {
+            border-color: #4299e1;
+        }
+        
+        .dark-mode pre {
+            background-color: #2a2a2a;
+            border-color: #444;
+        }
+        
+        .dark-mode table th {
+            background-color: #333;
+        }
+        
+        .dark-mode table th, .dark-mode table td {
+            border-color: #444;
+        }
+        
+        .dark-mode .file-upload-container {
+            background-color: #2d2d2d;
+            border-color: #444;
+        }
+        
+        .dark-mode .file-upload-container.drag-over {
+            background-color: #375a7f;
+            border-color: #4299e1;
+        }
+        
+        .dark-mode .uploaded-file {
+            background-color: #333;
+            border-color: #444;
+        }
+        
+        .dark-mode .toggle-files-btn {
+            background-color: #444;
+            color: #e6e6e6;
+            border-color: #555;
+        }
+        
+        .dark-mode .toggle-files-btn:hover {
+            background-color: #555;
+        }
+        
+        .dark-mode blockquote {
+            border-left-color: #444;
+            color: #b8b8b8;
+        }
+        
+        .dark-mode code {
+            background-color: #333;
+        }
+        
+        /* Dark mode dropdown styling */
+        .dark-mode select {
+            background-color: #333;
+            color: #e6e6e6;
+            border-color: #555;
+        }
+        
+        .dark-mode select option {
+            background-color: #333;
+            color: #e6e6e6;
+        }
+        
+        /* Dark mode status messages */
+        .dark-mode .status.success {
+            background-color: #1e3a2f;
+            border-color: #2f855a;
+            color: #9ae6b4;
+        }
+        
+        .dark-mode .status.error {
+            background-color: #3b1d1d;
+            border-color: #c53030;
+            color: #feb2b2;
+        }
+        
+        .dark-mode .status.warning {
+            background-color: #3d2c1a;
+            border-color: #c05621;
+            color: #fbd38d;
+        }
+        
+        /* Dark mode toggle switch */
+        .theme-switch-container {
+            display: flex;
+            align-items: center;
+            margin-left: auto;
+            margin-right: 20px;
+        }
+        
+        .theme-switch {
+            display: inline-block;
+            height: 24px;
+            position: relative;
+            width: 44px;
+        }
+        
+        .theme-switch input {
+            display: none;
+        }
+        
+        .slider {
+            background-color: #ccc;
+            bottom: 0;
+            cursor: pointer;
+            left: 0;
+            position: absolute;
+            right: 0;
+            top: 0;
+            transition: .4s;
+            border-radius: 34px;
+        }
+        
+        .slider:before {
+            background-color: white;
+            bottom: 4px;
+            content: "";
+            height: 16px;
+            left: 4px;
+            position: absolute;
+            transition: .4s;
+            width: 16px;
+            border-radius: 50%;
+        }
+        
+        input:checked + .slider {
+            background-color: #3182ce;
+        }
+        
+        input:checked + .slider:before {
+            transform: translateX(20px);
+        }
+        
+        .theme-switch-icon {
+            margin-right: 8px;
+            font-size: 18px;
         }
         
         h1 {
@@ -19,6 +195,10 @@
             display: flex;
             align-items: center;
             gap: 10px;
+        }
+        
+        .dark-mode h1 {
+            color: #e6e6e6;
         }
         
         .container {
@@ -379,6 +559,14 @@
         <div class="app-header">
             <div class="app-logo">🤖</div>
             <h1>Ollama Chat Interface</h1>
+            <div class="theme-switch-container">
+                <span class="theme-switch-icon">☀️</span>
+                <label class="theme-switch">
+                    <input type="checkbox" id="theme-toggle">
+                    <span class="slider"></span>
+                </label>
+                <span class="theme-switch-icon">🌙</span>
+            </div>
         </div>
         <p>Interact with your local Ollama models.</p>
         
@@ -450,6 +638,9 @@
                 typographer: true, // Enable some language-neutral replacement + quotes beautification
             });
             
+            // Setup dark mode toggle
+            setupDarkMode();
+            
             // Get config for Ollama URL
             await getConfig();
             
@@ -478,6 +669,32 @@
             // Toggle file upload area
             document.getElementById('toggle-files-btn').addEventListener('click', toggleFileUploadArea);
         });
+        
+        // Setup dark mode functionality
+        function setupDarkMode() {
+            const toggleSwitch = document.getElementById('theme-toggle');
+            
+            // Check for saved user preference
+            const currentTheme = localStorage.getItem('theme') || 'light';
+            
+            // Set initial theme
+            if (currentTheme === 'dark') {
+                document.body.classList.add('dark-mode');
+                toggleSwitch.checked = true;
+            }
+            
+            // Listen for toggle changes
+            toggleSwitch.addEventListener('change', function() {
+                if (this.checked) {
+                    document.body.classList.add('dark-mode');
+                    localStorage.setItem('theme', 'dark');
+                } else {
+                    document.body.classList.remove('dark-mode');
+                    localStorage.setItem('theme', 'light');
+                }
+                console.log('Theme toggled to:', this.checked ? 'dark' : 'light');
+            });
+        }
         
         // Add a message to the UI
         function addMessage(role, content) {
