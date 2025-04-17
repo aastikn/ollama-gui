@@ -1,11 +1,11 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::{Html, sse::Event, sse::Sse},
+    response::{Html, sse::Event, sse::Sse, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
-use futures::Stream;
+use futures::Stream; // Remove StreamExt as it's not used
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, env, net::SocketAddr, sync::Arc};
@@ -54,6 +54,19 @@ struct OllamaChunk {
     done: Option<bool>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct FileContext {
+    name: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StreamWithFilesRequest {
+    model: String,
+    prompt: String,
+    files: Vec<FileContext>,
+}
+
 #[derive(Clone)]
 struct AppState {
     client: Client,
@@ -86,6 +99,7 @@ async fn main() {
         .route("/api/models", get(get_models))
         .route("/api/generate", post(generate_response))
         .route("/api/stream/:model/:prompt", get(stream_response))
+        .route("/api/stream_with_files", post(stream_with_files))
         .route("/api/check_ollama", get(check_ollama))
         .route("/api/start_ollama", get(try_start_ollama))
         .route("/api/abort_generation", post(abort_generation))
@@ -220,15 +234,28 @@ async fn stream_response(
     let client = state.client.clone();
     let ollama_url = state.ollama_url.clone();
     
+    // Decode the URL-encoded prompt
+    let decoded_prompt = match urlencoding::decode(&prompt) {
+        Ok(decoded) => decoded.into_owned(),
+        Err(_) => {
+            // If decoding fails, use the original prompt
+            prompt
+        }
+    };
+    
     let (tx, rx) = tokio::sync::mpsc::channel(100);
     
     // Spawn a task to handle the streaming
     tokio::spawn(async move {
         let ollama_request = OllamaRequest {
             model,
-            prompt,
+            prompt: decoded_prompt,
             stream: true,
         };
+        
+        // Log the request size for debugging
+        let request_size = ollama_request.prompt.len();
+        tracing::debug!("Request prompt size: {} bytes", request_size);
         
         let res = client
             .post(format!("{}/api/generate", ollama_url))
@@ -240,14 +267,17 @@ async fn stream_response(
             Ok(r) => r,
             Err(e) => {
                 let _ = tx.send(Ok(Event::default().data(format!("Error: {}", e)))).await;
+                let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
                 return;
             }
         };
         
         let mut buffer = Vec::new();
+        let mut full_response = String::new();
         
         // Stream chunks of data
         while let Some(chunk) = response.chunk().await.unwrap_or(None) {
+            tracing::debug!("Received raw chunk of size: {} bytes", chunk.len());
             buffer.extend_from_slice(&chunk);
             
             // Process complete lines
@@ -262,15 +292,29 @@ async fn stream_response(
                         match serde_json::from_str::<OllamaChunk>(&line) {
                             Ok(chunk) => {
                                 if let Some(response_text) = chunk.response {
-                                    let _ = tx.send(Ok(Event::default().data(response_text))).await;
+                                    tracing::debug!("Received response token: {}", response_text);
+                                    // Add to full response
+                                    full_response.push_str(&response_text);
+                                    
+                                    // Send the full response so far, but only if it's not too long
+                                    if full_response.len() < 100000 { // Limit to ~100KB per message
+                                        tracing::debug!("Sending full response of length: {}", full_response.len());
+                                        let _ = tx.send(Ok(Event::default().data(full_response.clone()))).await;
+                                    } else {
+                                        // For very long responses, just send the new part
+                                        tracing::debug!("Full response too large ({}), sending partial update", full_response.len());
+                                        let _ = tx.send(Ok(Event::default().data(response_text))).await;
+                                    }
                                 }
                                 
                                 if chunk.done.unwrap_or(false) {
+                                    tracing::info!("Generation completed, sending DONE signal");
                                     let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
                                     return;
                                 }
                             }
                             Err(e) => {
+                                tracing::error!("Error parsing JSON: {}\nJSON was: {}", e, line);
                                 let _ = tx.send(Ok(Event::default().data(format!("Error parsing JSON: {}", e)))).await;
                             }
                         }
@@ -285,8 +329,147 @@ async fn stream_response(
                 buffer.clear();
             }
         }
+        
+        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
     });
     
+    Sse::new(ReceiverStream::new(rx))
+}
+
+// Stream response with file contexts using response streaming
+async fn stream_with_files(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<StreamWithFilesRequest>,
+) -> impl IntoResponse {
+    let client = state.client.clone();
+    let ollama_url = state.ollama_url.clone();
+    
+    // Build a prompt with context from files
+    let mut context_prompt = String::new();
+    
+    // Add file contents as context
+    for file in &request.files {
+        context_prompt.push_str(&format!("File: {}\n```\n{}\n```\n\n", file.name, file.content));
+    }
+    
+    // Log information about the request first
+    tracing::info!("Processing request with {} files, prompt size: {} bytes", 
+        request.files.len(), request.prompt.len());
+    
+    // Then combine with user prompt
+    let final_prompt = if !context_prompt.is_empty() {
+        format!("I have the following files for context:\n\n{}\n\nBased on these files, {}", context_prompt, request.prompt)
+    } else {
+        request.prompt
+    };
+    
+    tracing::debug!("Request prompt size with files: {} bytes", final_prompt.len());
+    
+    // Create a channel for streaming responses with proper type annotation
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, Infallible>>(100);
+    let model = request.model;
+    
+    // Spawn a task to handle the streaming
+    tokio::spawn(async move {
+        let ollama_request = OllamaRequest {
+            model,
+            prompt: final_prompt,
+            stream: true,
+        };
+        
+        // Make the request to Ollama
+        let res = client
+            .post(format!("{}/api/generate", ollama_url))
+            .json(&ollama_request)
+            .send()
+            .await;
+        
+        let res = match res {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(Ok(Event::default().data(format!("Error: {}", e)))).await;
+                let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                return;
+            }
+        };
+        
+        // Check if the request was successful
+        if !res.status().is_success() {
+            let status = res.status();
+            let error_text = match res.text().await {
+                Ok(text) => text,
+                Err(_) => "Unknown error".to_string(),
+            };
+            
+            let _ = tx.send(Ok(Event::default().data(format!("Error: HTTP {} - {}", status, error_text)))).await;
+            let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+            return;
+        }
+        
+        let mut response = res;
+        let mut buffer = Vec::new();
+        let mut full_response = String::new();
+        
+        // Stream chunks of data
+        while let Some(chunk) = response.chunk().await.unwrap_or(None) {
+            tracing::debug!("Received raw chunk of size: {} bytes", chunk.len());
+            buffer.extend_from_slice(&chunk);
+            
+            // Process complete lines
+            let mut start = 0;
+            for i in 0..buffer.len() {
+                if buffer[i] == b'\n' {
+                    if i > start {
+                        let line = String::from_utf8_lossy(&buffer[start..i]).to_string();
+                        start = i + 1;
+                        
+                        // Parse JSON
+                        match serde_json::from_str::<OllamaChunk>(&line) {
+                            Ok(chunk) => {
+                                if let Some(response_text) = chunk.response {
+                                    tracing::debug!("Received response token: {}", response_text);
+                                    // Add to full response
+                                    full_response.push_str(&response_text);
+                                    
+                                    // Send the full response so far, but only if it's not too long
+                                    if full_response.len() < 100000 { // Limit to ~100KB per message
+                                        tracing::debug!("Sending full response of length: {}", full_response.len());
+                                        let _ = tx.send(Ok(Event::default().data(full_response.clone()))).await;
+                                    } else {
+                                        // For very long responses, just send the new part
+                                        tracing::debug!("Full response too large ({}), sending partial update", full_response.len());
+                                        let _ = tx.send(Ok(Event::default().data(response_text))).await;
+                                    }
+                                }
+                                
+                                if chunk.done.unwrap_or(false) {
+                                    tracing::info!("Generation completed, sending DONE signal");
+                                    let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+                                    return;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Error parsing JSON: {}\nJSON was: {}", e, line);
+                                let _ = tx.send(Ok(Event::default().data(format!("Error parsing JSON: {}", e)))).await;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Keep remaining data
+            if start < buffer.len() {
+                buffer = buffer[start..].to_vec();
+            } else {
+                buffer.clear();
+            }
+        }
+        
+        // Send any remaining response and done signal
+        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+    });
+    
+    // Return SSE stream from the receiver
     Sse::new(ReceiverStream::new(rx))
 }
 

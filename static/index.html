@@ -298,6 +298,76 @@
             margin-top: 10px;
             font-size: 16px;
         }
+        
+        .file-upload-container {
+            margin: 15px 0;
+            border: 2px dashed #ddd;
+            border-radius: 6px;
+            padding: 10px;
+            text-align: center;
+            background-color: #fafbfc;
+            transition: background-color 0.2s;
+        }
+        
+        .file-upload-container.drag-over {
+            background-color: #ebf4ff;
+            border-color: #4299e1;
+        }
+        
+        .file-upload-container p {
+            margin: 5px 0;
+            color: #666;
+        }
+        
+        .uploaded-files {
+            margin-top: 15px;
+        }
+        
+        .uploaded-file {
+            display: flex;
+            align-items: center;
+            background-color: #f7fafc;
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin-bottom: 6px;
+            border: 1px solid #edf2f7;
+        }
+        
+        .file-icon {
+            margin-right: 8px;
+            color: #4a5568;
+        }
+        
+        .file-name {
+            flex-grow: 1;
+            font-size: 14px;
+        }
+        
+        .file-size {
+            color: #718096;
+            font-size: 12px;
+            margin: 0 10px;
+        }
+        
+        .file-action {
+            cursor: pointer;
+            color: #e53e3e;
+            font-size: 14px;
+        }
+        
+        .toggle-files-btn {
+            background-color: #edf2f7;
+            color: #4a5568;
+            border: 1px solid #e2e8f0;
+        }
+        
+        .toggle-files-btn:hover {
+            background-color: #e2e8f0;
+        }
+        
+        .hidden {
+            display: none;
+        }
     </style>
     <!-- Add markdown-it library -->
     <script src="https://cdn.jsdelivr.net/npm/markdown-it@13.0.1/dist/markdown-it.min.js"></script>
@@ -334,7 +404,19 @@
                 </div>
             </div>
             
+            <div id="file-context-container" class="hidden">
+                <div class="file-upload-container" id="file-drop-area">
+                    <p>Drag & drop files here or <label for="file-input" style="color: #4299e1; cursor: pointer;">browse</label></p>
+                    <input type="file" id="file-input" style="display: none;" multiple>
+                </div>
+                
+                <div class="uploaded-files" id="uploaded-files">
+                    <!-- Uploaded files will appear here -->
+                </div>
+            </div>
+            
             <div class="input-area">
+                <button id="toggle-files-btn" class="toggle-files-btn">📎</button>
                 <input type="text" id="user-input" placeholder="What would you like to ask?" />
                 <button id="send-button">Send</button>
                 <button id="stop-button" style="display: none; background-color: #e53e3e;">Stop</button>
@@ -356,6 +438,7 @@
         let md = null; // Markdown parser
         let currentGenerationSource = null; // Track current EventSource
         let isGenerating = false; // Track generation state
+        let uploadedFiles = []; // Store uploaded files
         
         // Initialize the app
         document.addEventListener('DOMContentLoaded', async () => {
@@ -384,7 +467,204 @@
             
             // Update the UI with the Ollama URL
             document.getElementById('ollama-url').textContent = ollamaUrl;
+            
+            // Add debugging for file upload components
+            console.log('File drop area:', document.getElementById('file-drop-area'));
+            console.log('File input:', document.getElementById('file-input'));
+            
+            // Set up file upload event listeners
+            setupFileUpload();
+            
+            // Toggle file upload area
+            document.getElementById('toggle-files-btn').addEventListener('click', toggleFileUploadArea);
         });
+        
+        // Add a message to the UI
+        function addMessage(role, content) {
+            const messagesContainer = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}-message`;
+            
+            // Use markdown parsing for assistant messages, plain text for user messages
+            if (role === 'assistant' && md) {
+                messageDiv.innerHTML = md.render(content);
+            } else {
+                // For user messages, escape HTML and preserve line breaks
+                const escapedContent = escapeHtml(content).replace(/\n/g, '<br>');
+                messageDiv.innerHTML = escapedContent;
+            }
+            
+            messagesContainer.appendChild(messageDiv);
+            
+            // Scroll to bottom
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            
+            // Add to messages array
+            messages.push({ role, content });
+            
+            return messageDiv;
+        }
+        
+        // Escape HTML to prevent XSS
+        function escapeHtml(str) {
+            return str
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+        
+        // Make removeFile function globally accessible 
+        window.removeFile = function(fileId) {
+            uploadedFiles = uploadedFiles.filter(file => file.id !== fileId);
+            
+            const fileElement = document.querySelector(`.uploaded-file[data-file-id="${fileId}"]`);
+            if (fileElement) {
+                fileElement.remove();
+            }
+        }
+        
+        // Format file size in readable format
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        // Toggle file upload area visibility
+        function toggleFileUploadArea() {
+            const fileContainer = document.getElementById('file-context-container');
+            fileContainer.classList.toggle('hidden');
+            console.log('File container visibility toggled:', !fileContainer.classList.contains('hidden'));
+        }
+        
+        // Display uploaded file in the UI
+        function displayUploadedFile(file) {
+            const uploadedFilesContainer = document.getElementById('uploaded-files');
+            
+            const fileElement = document.createElement('div');
+            fileElement.className = 'uploaded-file';
+            fileElement.dataset.fileId = file.id;
+            
+            // Format file size
+            const formattedSize = formatFileSize(file.size);
+            
+            fileElement.innerHTML = `
+                <span class="file-icon">📄</span>
+                <span class="file-name">${escapeHtml(file.name)}</span>
+                <span class="file-size">${formattedSize}</span>
+                <span class="file-action" onclick="removeFile(${file.id})">✕</span>
+            `;
+            
+            uploadedFilesContainer.appendChild(fileElement);
+        }
+        
+        // Process uploaded files
+        function handleFiles(files) {
+            if (!files || files.length === 0) return;
+            
+            // Make the files container visible if it's hidden
+            const fileContainer = document.getElementById('file-context-container');
+            if (fileContainer.classList.contains('hidden')) {
+                fileContainer.classList.remove('hidden');
+            }
+            
+            // Process each file (reading content and storing in memory)
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                
+                // Check if file is text-based (we should implement better detection)
+                if (file.type.startsWith('text/') || 
+                    file.name.match(/\.(txt|md|py|js|html|css|json|csv|xml|log|sh|bat|rs|go|java|c|cpp|h|hpp|jsx|tsx|ts|vue|svelte|php|rb|pl|yml|yaml)$/i)) {
+                    
+                    const reader = new FileReader();
+                    
+                    reader.onload = function(e) {
+                        // Store the file object with its content
+                        const fileObject = {
+                            id: Date.now() + i, // Unique ID
+                            name: file.name,
+                            size: file.size,
+                            content: e.target.result
+                        };
+                        
+                        uploadedFiles.push(fileObject);
+                        displayUploadedFile(fileObject);
+                        console.log('File added:', fileObject.name);
+                    };
+                    
+                    reader.onerror = function(e) {
+                        console.error('Error reading file:', file.name, e);
+                        alert(`Error reading file: ${file.name}`);
+                    };
+                    
+                    reader.readAsText(file);
+                } else {
+                    alert(`File ${file.name} is not a supported text-based file.`);
+                }
+            }
+        }
+        
+        // Setup file upload functionality
+        function setupFileUpload() {
+            const dropArea = document.getElementById('file-drop-area');
+            const fileInput = document.getElementById('file-input');
+            
+            if (!dropArea || !fileInput) {
+                console.error('File upload elements not found in the DOM');
+                return;
+            }
+            
+            // Prevent default drag behaviors
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+            
+            // Highlight drop area when dragging over it
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropArea.addEventListener(eventName, highlight, false);
+            });
+            
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropArea.addEventListener(eventName, unhighlight, false);
+            });
+            
+            // Handle dropped files
+            dropArea.addEventListener('drop', function(e) {
+                console.log('File dropped');
+                const dt = e.dataTransfer;
+                const files = dt.files;
+                handleFiles(files);
+            }, false);
+            
+            // Handle selected files from file input
+            fileInput.addEventListener('change', function() {
+                console.log('Files selected via input');
+                const files = fileInput.files;
+                handleFiles(files);
+            }, false);
+            
+            console.log('File upload listeners initialized');
+            
+            function preventDefaults(e) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            
+            function highlight() {
+                dropArea.classList.add('drag-over');
+            }
+            
+            function unhighlight() {
+                dropArea.classList.remove('drag-over');
+            }
+        }
         
         // Get configuration
         async function getConfig() {
@@ -513,6 +793,253 @@
             }
         }
         
+        // Stream response from the Ollama model
+        async function streamResponse(model, prompt, messageElement) {
+            try {
+                // Encode the prompt for URL
+                const encodedPrompt = encodeURIComponent(prompt);
+                const encodedModel = encodeURIComponent(model);
+                
+                const url = `/api/stream/${encodedModel}/${encodedPrompt}`;
+                console.log(`Connecting to SSE endpoint: ${url}`);
+                const eventSource = new EventSource(url);
+                
+                // Store the EventSource for potential cancellation
+                currentGenerationSource = eventSource;
+                
+                let fullResponse = '';
+                let responseCount = 0;
+                
+                eventSource.onopen = () => {
+                    console.log('SSE connection opened successfully');
+                };
+                
+                eventSource.onmessage = (event) => {
+                    responseCount++;
+                    console.log(`SSE message #${responseCount} received, data length: ${event.data.length}`);
+                    
+                    if (event.data === '[DONE]') {
+                        console.log('Received [DONE] signal, closing connection');
+                        finishGeneration();
+                        return;
+                    }
+                    
+                    // If the server sent the full response (like we implemented), 
+                    // just use that directly
+                    fullResponse = event.data;
+                    console.log(`Response content (first 100 chars): ${fullResponse.substring(0, 100)}...`);
+                    
+                    // Render the markdown
+                    if (md) {
+                        messageElement.innerHTML = md.render(fullResponse);
+                    } else {
+                        messageElement.innerHTML = fullResponse;
+                    }
+                    
+                    // Scroll to bottom as response grows
+                    const messagesContainer = document.getElementById('messages');
+                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                };
+                
+                eventSource.onerror = (error) => {
+                    console.error('SSE Error:', error);
+                    if (isGenerating) {
+                        messageElement.innerHTML = md.render(fullResponse + '\n\n*Generation stopped.*');
+                        finishGeneration();
+                    }
+                };
+                
+                // Setup stop button handler
+                document.getElementById('stop-button').onclick = () => {
+                    if (currentGenerationSource) {
+                        console.log('Stop button clicked, closing EventSource');
+                        // Close the connection
+                        currentGenerationSource.close();
+                        currentGenerationSource = null;
+                        
+                        // Update the UI to indicate the stop
+                        messageElement.innerHTML = md.render(fullResponse + '\n\n*Generation stopped.*');
+                        
+                        // Reset UI elements
+                        finishGeneration();
+                        
+                        // Fetch abort endpoint to notify server
+                        fetch('/api/abort_generation', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            }
+                        }).catch(error => console.error('Error aborting generation:', error));
+                    }
+                };
+            } catch (error) {
+                console.error('Error:', error);
+                messageElement.innerHTML = `Error: ${error.message}`;
+                finishGeneration();
+            }
+        }
+        
+        // Send message with file context using POST method
+        async function sendMessageWithFiles(prompt, model, messageElement) {
+            try {
+                // Prepare context from uploaded files
+                const fileContexts = uploadedFiles.map(file => ({
+                    name: file.name,
+                    content: file.content
+                }));
+                
+                const requestBody = {
+                    model: model,
+                    prompt: prompt,
+                    files: fileContexts
+                };
+                
+                console.log(`Sending request with ${fileContexts.length} files, prompt: ${prompt.substring(0, 50)}...`);
+                
+                let abortController = new AbortController();
+                let signal = abortController.signal;
+                
+                // Make a single POST request with a streaming response
+                console.log('Initiating streaming request to /api/stream_with_files');
+                const response = await fetch('/api/stream_with_files', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody),
+                    signal: signal
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                // Create a reader for the response body
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let fullResponse = '';
+                let chunkCount = 0;
+                
+                // Setup stop button handler early
+                document.getElementById('stop-button').onclick = () => {
+                    console.log('Stop button clicked, aborting fetch');
+                    abortController.abort();
+                    reader.cancel();
+                    
+                    // Update the UI to indicate the stop
+                    messageElement.innerHTML = md.render(fullResponse + '\n\n*Generation stopped.*');
+                    
+                    // Reset UI elements
+                    finishGeneration();
+                    
+                    // Notify server of abort
+                    fetch('/api/abort_generation', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        }
+                    }).catch(error => console.error('Error aborting generation:', error));
+                };
+                
+                // Process the chunks as they arrive
+                // Process the chunks as they arrive
+try {
+    let buffer = '';
+    
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+            console.log('Stream completed');
+            finishGeneration();
+            break;
+        }
+        
+        // Decode the chunk
+        chunkCount++;
+        const chunk = decoder.decode(value, { stream: true });
+        console.log(`Received chunk #${chunkCount}, size: ${chunk.length} bytes`);
+        
+        // Append chunk to buffer
+        buffer += chunk;
+        
+        // Extract all complete messages (ending with \n\n)
+        while (buffer.includes('\n\n')) {
+            const messageEndIndex = buffer.indexOf('\n\n');
+            const message = buffer.substring(0, messageEndIndex);
+            buffer = buffer.substring(messageEndIndex + 2); // +2 to skip the \n\n
+            
+            // Process the message if it starts with data:
+            if (message.startsWith('data:')) {
+                const data = message.substring(5).trim();
+                
+                if (data === '[DONE]') {
+                    console.log('Received [DONE] signal');
+                    finishGeneration();
+                    break;
+                }
+                
+                // This is a complete response from the server - use it directly
+                fullResponse = data.replace(/data:/g, '');
+                
+                // Render the markdown
+                if (md) {
+                    messageElement.innerHTML = md.render(fullResponse);
+                } else {
+                    messageElement.innerHTML = fullResponse;
+                }
+                
+                // Scroll to bottom
+                const messagesContainer = document.getElementById('messages');
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+        }
+    }
+} catch (error) {
+    if (error.name === 'AbortError') {
+        console.log('Fetch aborted');
+    } else {
+        throw error;
+    }
+}
+            } catch (error) {
+                console.error('Error with file context:', error);
+                messageElement.innerHTML = md.render(`**Error:** ${error.message}`);
+                finishGeneration();
+            }
+        }
+
+        // Reset UI after generation completes or is stopped
+        function finishGeneration() {
+            // Close the EventSource if it exists
+            if (currentGenerationSource) {
+                console.log('Closing EventSource connection');
+                currentGenerationSource.close();
+                currentGenerationSource = null;
+            }
+            
+            // Reset UI elements
+            document.getElementById('send-button').style.display = 'inline-block';
+            document.getElementById('stop-button').style.display = 'none';
+            document.getElementById('user-input').disabled = false;
+            isGenerating = false;
+            console.log('Generation finished, UI reset');
+        }
+        
+        // Extract data from Server-Sent Events formatted text
+        function extractSSEData(text) {
+            // Parse SSE formatted data
+            // Format is typically "data: actual content\n\n"
+            const regex = /data:(.*?)(\n\n|\n$)/gs;
+            let extractedContent = '';
+            let match;
+            
+            while ((match = regex.exec(text)) !== null) {
+                extractedContent += match[1];
+            }
+            
+            return extractedContent;
+        }
+        
         // Send a message to Ollama
         async function sendMessage() {
             const userInput = document.getElementById('user-input');
@@ -549,126 +1076,14 @@
             document.getElementById('user-input').disabled = true;
             isGenerating = true;
             
-            // Stream the response
-            streamResponse(selectedModel, prompt, assistantMsgElement);
-        }
-        
-        // Add a message to the UI
-        function addMessage(role, content) {
-            const messagesContainer = document.getElementById('messages');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${role}-message`;
-            
-            // Use markdown parsing for assistant messages, plain text for user messages
-            if (role === 'assistant' && md) {
-                messageDiv.innerHTML = md.render(content);
+            // Check if we have uploaded files
+            if (uploadedFiles.length > 0) {
+                // Use POST method instead of GET for file contexts
+                sendMessageWithFiles(prompt, selectedModel, assistantMsgElement);
             } else {
-                // For user messages, escape HTML and preserve line breaks
-                const escapedContent = content
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;')
-                    .replace(/"/g, '&quot;')
-                    .replace(/'/g, '&#039;')
-                    .replace(/\n/g, '<br>');
-                messageDiv.innerHTML = escapedContent;
+                // Use regular GET method for streaming without files
+                streamResponse(selectedModel, prompt, assistantMsgElement);
             }
-            
-            messagesContainer.appendChild(messageDiv);
-            
-            // Scroll to bottom
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            
-            // Add to messages array
-            messages.push({ role, content });
-            
-            return messageDiv;
-        }
-        
-        // Stream response from the Ollama model
-        async function streamResponse(model, prompt, messageElement) {
-            try {
-                // Encode the prompt for URL
-                const encodedPrompt = encodeURIComponent(prompt);
-                const encodedModel = encodeURIComponent(model);
-                
-                const url = `/api/stream/${encodedModel}/${encodedPrompt}`;
-                const eventSource = new EventSource(url);
-                
-                // Store the EventSource for potential cancellation
-                currentGenerationSource = eventSource;
-                
-                let fullResponse = '';
-                
-                eventSource.onmessage = (event) => {
-                    if (event.data === '[DONE]') {
-                        finishGeneration();
-                        return;
-                    }
-                    
-                    fullResponse += event.data;
-                    // Render the markdown
-                    if (md) {
-                        messageElement.innerHTML = md.render(fullResponse);
-                    } else {
-                        messageElement.innerHTML = fullResponse;
-                    }
-                    
-                    // Scroll to bottom as response grows
-                    const messagesContainer = document.getElementById('messages');
-                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                };
-                
-                eventSource.onerror = (error) => {
-                    console.error('SSE Error:', error);
-                    if (isGenerating) {
-                        messageElement.innerHTML += '\n\n*Generation stopped.*';
-                        finishGeneration();
-                    }
-                };
-                
-                // Setup stop button handler
-                document.getElementById('stop-button').onclick = () => {
-                    if (currentGenerationSource) {
-                        // Close the connection
-                        currentGenerationSource.close();
-                        currentGenerationSource = null;
-                        
-                        // Update the UI to indicate the stop
-                        messageElement.innerHTML = md.render(fullResponse + '\n\n*Generation stopped.*');
-                        
-                        // Reset UI elements
-                        finishGeneration();
-                        
-                        // Fetch abort endpoint to notify server
-                        fetch('/api/abort_generation', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            }
-                        }).catch(error => console.error('Error aborting generation:', error));
-                    }
-                };
-            } catch (error) {
-                console.error('Error:', error);
-                messageElement.innerHTML = `Error: ${error.message}`;
-                finishGeneration();
-            }
-        }
-        
-        // Reset UI after generation completes or is stopped
-        function finishGeneration() {
-            // Close the EventSource if it exists
-            if (currentGenerationSource) {
-                currentGenerationSource.close();
-                currentGenerationSource = null;
-            }
-            
-            // Reset UI elements
-            document.getElementById('send-button').style.display = 'inline-block';
-            document.getElementById('stop-button').style.display = 'none';
-            document.getElementById('user-input').disabled = false;
-            isGenerating = false;
         }
     </script>
 </body>
